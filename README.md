@@ -16,6 +16,7 @@ Build a high-quality, high-performance sparse model with:
 - `configs/` model + training configs
 - `training/` data prep and training entrypoints
 - `scripts/` utility scripts, including Mac M1 setup
+- `datasets/` dataset cleaning/prep tools for Linux/tool experts
 - `src/munin_moe/` model skeleton and routing modules
 - `eval/` evaluation checklist and benchmark templates
 - `scripts/export_to_gguf.py` GGUF export wrapper for llama.cpp tooling
