@@ -1,0 +1,33 @@
+model:
+  name: munin-moe-v1
+  vocab_size: 32000
+  max_seq_len: 2048
+  hidden_size: 768
+  n_layers: 16
+  n_heads: 12
+  n_kv_heads: 4
+  rope_theta: 10000
+  norm: rmsnorm
+
+moe:
+  enabled: true
+  moe_layers: [4, 8, 12, 15]
+  num_experts: 2
+  expert_names: [linux, toolcalling]
+  expert_ffn_mult: 2.5
+  router_type: topk
+  top_k_default: 1
+  top_k_fallback: 2
+  entropy_fallback_threshold: 1.15
+
+runtime_budget:
+  mode: balanced
+  eco:
+    max_active_experts: 1
+    max_tokens_per_second_target: 14
+  balanced:
+    max_active_experts: 1
+    max_tokens_per_second_target: 10
+  burst:
+    max_active_experts: 2
+    max_tokens_per_second_target: 7
