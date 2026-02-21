@@ -20,42 +20,67 @@ pip install -U pip wheel setuptools
 pip install -r requirements.txt
 ```
 
-## 3) Prepare datasets
-Put your domain datasets here:
-- `data/raw/linux/`
-- `data/raw/toolcalling/`
-
-Then process:
+## 3) Clean Linux dataset
 ```bash
-python training/prepare_data.py --input data/raw --output data/processed
+python datasets/clean_linux_dataset.py \
+  --input /path/to/linux_raw.csv \
+  --output data/processed/linux_train.jsonl \
+  --val-output data/processed/linux_val.jsonl \
+  --val-ratio 0.1
 ```
 
-## 4) Start training (2 experts)
+## 4) Clean tool-calling dataset
+```bash
+python datasets/clean_toolcalling_dataset.py \
+  --input /path/to/toolcalling_raw.json \
+  --output data/processed/toolcalling_train.jsonl \
+  --val-output data/processed/toolcalling_val.jsonl \
+  --val-ratio 0.1
+```
+
+## 5) Merge expert datasets for training
+```bash
+python training/prepare_data.py \
+  --linux-train data/processed/linux_train.jsonl \
+  --linux-val data/processed/linux_val.jsonl \
+  --tool-train data/processed/toolcalling_train.jsonl \
+  --tool-val data/processed/toolcalling_val.jsonl \
+  --output data/processed
+```
+
+## 6) Start training (verbose logs enabled)
 ```bash
 python training/train_moe.py \
   --config configs/model_moe_2experts.yaml \
   --train-config configs/train_m1_lora.yaml
 ```
 
-## 5) Evaluate Linux + Tool-calling quality
+Logs now include:
+- batch/step progress
+- total/lm/router/load-balance losses
+- per-step token count + step time
+- expert utilization ratios
+- epoch summary with train/val loss
+
+## 7) Evaluate Linux + Tool-calling quality
 ```bash
 python eval/run_eval.py --checkpoint artifacts/latest
 ```
 
-## 6) Export for Pi inference
-(placeholder for GGUF/quantization pipeline)
+## 8) Export for Pi inference (GGUF)
 ```bash
-# Example flow (to wire later):
-# python scripts/export_to_gguf.py --ckpt artifacts/latest --out artifacts/gguf/model.gguf
-# python scripts/quantize.py --in artifacts/gguf/model.gguf --out artifacts/gguf/model-q4.gguf --mode q4_k_m
+python scripts/export_to_gguf.py \
+  --checkpoint artifacts/latest \
+  --llama-cpp-dir ~/llama.cpp \
+  --out artifacts/gguf/munin-moe-f16.gguf \
+  --dtype f16
 ```
 
-## 7) Deploy to Raspberry Pi 5
+## 9) Deploy to Raspberry Pi 5
 - Copy quantized model to Pi
 - Run Pi CPU benchmark + latency checks
 
 ## M1-specific tips
 - Use smaller micro-batch sizes (`1-2`) and gradient accumulation (`16-64`)
-- Enable mixed precision where stable
 - Keep context length modest during early experiments (512/1024)
-- Train adapters first (LoRA/QLoRA), then full/sparse tuning if needed
+- Start with 1 epoch dry-run to validate data and logs before long training

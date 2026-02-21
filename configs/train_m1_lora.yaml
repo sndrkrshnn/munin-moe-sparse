@@ -36,4 +36,4 @@ outputs:
   output_dir: artifacts
   save_steps: 500
   eval_steps: 500
-  logging_steps: 50
+  logging_steps: 5

@@ -29,18 +29,35 @@ source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 
-# 2) Prepare data
-python training/prepare_data.py --input data/raw --output data/processed
+# 2) Clean Linux dataset
+python datasets/clean_linux_dataset.py \
+  --input /path/to/linux_raw.csv \
+  --output data/processed/linux_train.jsonl \
+  --val-output data/processed/linux_val.jsonl
 
-# 3) Train sparse model (2 experts)
+# 3) Clean tool-calling dataset
+python datasets/clean_toolcalling_dataset.py \
+  --input /path/to/toolcalling_raw.json \
+  --output data/processed/toolcalling_train.jsonl \
+  --val-output data/processed/toolcalling_val.jsonl
+
+# 4) Merge expert datasets for training
+python training/prepare_data.py \
+  --linux-train data/processed/linux_train.jsonl \
+  --linux-val data/processed/linux_val.jsonl \
+  --tool-train data/processed/toolcalling_train.jsonl \
+  --tool-val data/processed/toolcalling_val.jsonl \
+  --output data/processed
+
+# 5) Train sparse model (2 experts)
 python training/train_moe.py \
   --config configs/model_moe_2experts.yaml \
   --train-config configs/train_m1_lora.yaml
 
-# 4) Evaluate
+# 6) Evaluate
 python eval/run_eval.py --checkpoint artifacts/latest
 
-# 5) Export to GGUF (see docs/pi-export-and-quantization.md)
+# 7) Export to GGUF (see docs/pi-export-and-quantization.md)
 python scripts/export_to_gguf.py \
   --checkpoint artifacts/latest \
   --llama-cpp-dir ~/llama.cpp \

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import time
 from pathlib import Path
 
 import torch
@@ -100,6 +101,19 @@ def expert_utilization(router_aux):
     return {f"expert_{i}": counts[i].item() for i in range(counts.numel())}
 
 
+def evaluate(model, dataloader, device, top_k):
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for x, y, _ in dataloader:
+            x, y = x.to(device), y.to(device)
+            logits, _ = model(x, top_k=top_k)
+            l = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
+            losses.append(l.item())
+    model.train()
+    return sum(losses) / len(losses) if losses else float("nan")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -135,7 +149,8 @@ def main():
         expert_mult=moe.get("expert_ffn_mult", 2.5),
     )
 
-    device = "mps" if train_cfg["hardware"].get("device") == "mps" and torch.backends.mps.is_available() else "cpu"
+    requested = train_cfg["hardware"].get("device", "cpu")
+    device = "mps" if requested == "mps" and torch.backends.mps.is_available() else "cpu"
     model.to(device)
 
     optim = torch.optim.AdamW(model.parameters(), lr=float(train_cfg["training"]["learning_rate"]))
@@ -146,14 +161,27 @@ def main():
     router_w = float(loss_cfg.get("router_supervision_weight", 0.2))
     lb_w = float(loss_cfg.get("load_balance_weight", 0.02))
 
+    logging_steps = int(train_cfg.get("outputs", {}).get("logging_steps", 10))
+
     out_dir = Path(train_cfg["outputs"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("=== Training Configuration ===")
+    print(f"device={device} tokenizer={tokenizer_name}")
+    print(f"train_samples={len(ds_train)} val_samples={len(ds_val)}")
+    print(f"epochs={epochs} micro_batch={micro_bs} grad_acc={grad_acc}")
+    print(f"router_w={router_w} load_balance_w={lb_w}")
+    print(f"logging_steps={logging_steps} top_k={moe.get('top_k_default', 1)}")
 
     global_step = 0
     model.train()
     for ep in range(epochs):
+        ep_start = time.time()
         optim.zero_grad(set_to_none=True)
+        running_loss = 0.0
+
         for i, (x, y, e) in enumerate(train_dl):
+            step_start = time.time()
             x, y, e = x.to(device), y.to(device), e.to(device)
             logits, aux = model(x, top_k=moe.get("top_k_default", 1))
             lm_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
@@ -161,34 +189,34 @@ def main():
             lb_loss = router_load_balance_loss(aux).to(device)
             loss = lm_loss + router_w * r_loss + lb_w * lb_loss
             (loss / grad_acc).backward()
+            running_loss += loss.item()
 
             if (i + 1) % grad_acc == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optim.step()
                 optim.zero_grad(set_to_none=True)
                 global_step += 1
-                if global_step % 10 == 0:
+
+                if global_step % logging_steps == 0:
                     util = expert_utilization(aux)
-                    util_s = " ".join(f"{k}={v:.2f}" for k, v in util.items())
+                    util_s = " ".join(f"{k}={v:.2f}" for k, v in util.items()) if util else "expert_util=NA"
+                    tok_count = int((y != -100).sum().item())
+                    dt = time.time() - step_start
                     print(
-                        f"ep={ep} step={global_step} lm={lm_loss.item():.4f} "
-                        f"router={r_loss.item():.4f} lb={lb_loss.item():.4f} {util_s}"
+                        f"[train] ep={ep+1}/{epochs} batch={i+1}/{len(train_dl)} step={global_step} "
+                        f"loss={loss.item():.4f} lm={lm_loss.item():.4f} router={r_loss.item():.4f} lb={lb_loss.item():.4f} "
+                        f"tokens={tok_count} step_sec={dt:.3f} {util_s}"
                     )
+
+        train_avg = running_loss / max(1, len(train_dl))
+        val_loss = evaluate(model, val_dl, device, moe.get("top_k_default", 1))
 
         ckpt = out_dir / f"epoch-{ep+1}.pt"
         torch.save({"model": model.state_dict(), "tokenizer": tok.name_or_path}, ckpt)
-        print(f"saved {ckpt}")
-
-    model.eval()
-    losses = []
-    with torch.no_grad():
-        for x, y, _ in val_dl:
-            x, y = x.to(device), y.to(device)
-            logits, _ = model(x, top_k=moe.get("top_k_default", 1))
-            l = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
-            losses.append(l.item())
-    if losses:
-        print(f"val_loss={sum(losses)/len(losses):.4f}")
+        print(
+            f"[epoch_end] ep={ep+1}/{epochs} train_loss={train_avg:.4f} val_loss={val_loss:.4f} "
+            f"elapsed_sec={time.time()-ep_start:.1f} checkpoint={ckpt}"
+        )
 
     latest = out_dir / "latest"
     latest.mkdir(exist_ok=True)
