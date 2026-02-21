@@ -23,6 +23,10 @@ lora:
   dropout: 0.05
   target_modules: [q_proj, k_proj, v_proj, o_proj, up_proj, down_proj, gate_proj]
 
+loss:
+  router_supervision_weight: 0.2
+  load_balance_weight: 0.02
+
 data:
   train_path: data/processed/train.jsonl
   val_path: data/processed/val.jsonl

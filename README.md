@@ -18,6 +18,7 @@ Build a high-quality, high-performance sparse model with:
 - `scripts/` utility scripts, including Mac M1 setup
 - `src/munin_moe/` model skeleton and routing modules
 - `eval/` evaluation checklist and benchmark templates
+- `scripts/export_to_gguf.py` GGUF export wrapper for llama.cpp tooling
 
 ## Quickstart (MacBook Air M1)
 ```bash
@@ -37,6 +38,13 @@ python training/train_moe.py \
 
 # 4) Evaluate
 python eval/run_eval.py --checkpoint artifacts/latest
+
+# 5) Export to GGUF (see docs/pi-export-and-quantization.md)
+python scripts/export_to_gguf.py \
+  --checkpoint artifacts/latest \
+  --llama-cpp-dir ~/llama.cpp \
+  --out artifacts/gguf/munin-moe-f16.gguf \
+  --dtype f16
 ```
 
 ## Notes

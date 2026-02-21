@@ -68,9 +68,36 @@ def router_supervision_loss(router_aux, expert_labels):
     losses = []
     for aux in router_aux:
         logits = aux["router_logits"]  # [B,T,E]
-        cls = logits[:, 0, :]  # supervise first token as sample-level label
+        cls = logits[:, 0, :]  # sample-level label supervision on first token
         losses.append(F.cross_entropy(cls[valid], expert_labels[valid]))
     return torch.stack(losses).mean()
+
+
+def router_load_balance_loss(router_aux):
+    if not router_aux:
+        return torch.tensor(0.0)
+
+    losses = []
+    for aux in router_aux:
+        probs = aux["router_probs"]  # [B,T,E]
+        mean_probs = probs.mean(dim=(0, 1))  # [E]
+        target = torch.full_like(mean_probs, 1.0 / mean_probs.numel())
+        losses.append(F.mse_loss(mean_probs, target))
+    return torch.stack(losses).mean()
+
+
+def expert_utilization(router_aux):
+    if not router_aux:
+        return {}
+    counts = None
+    for aux in router_aux:
+        sel = aux["selected"]  # [B,T,K]
+        e = aux["router_probs"].size(-1)
+        flat = sel.reshape(-1)
+        c = torch.bincount(flat, minlength=e).float()
+        counts = c if counts is None else counts + c
+    counts = counts / max(counts.sum().item(), 1.0)
+    return {f"expert_{i}": counts[i].item() for i in range(counts.numel())}
 
 
 def main():
@@ -114,7 +141,10 @@ def main():
     optim = torch.optim.AdamW(model.parameters(), lr=float(train_cfg["training"]["learning_rate"]))
     epochs = int(train_cfg["training"].get("epochs", 1))
     grad_acc = int(train_cfg["batching"].get("gradient_accumulation_steps", 1))
-    router_w = float(train_cfg.get("loss", {}).get("router_supervision_weight", 0.2))
+
+    loss_cfg = train_cfg.get("loss", {})
+    router_w = float(loss_cfg.get("router_supervision_weight", 0.2))
+    lb_w = float(loss_cfg.get("load_balance_weight", 0.02))
 
     out_dir = Path(train_cfg["outputs"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +158,8 @@ def main():
             logits, aux = model(x, top_k=moe.get("top_k_default", 1))
             lm_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
             r_loss = router_supervision_loss(aux, e)
-            loss = lm_loss + router_w * r_loss
+            lb_loss = router_load_balance_loss(aux).to(device)
+            loss = lm_loss + router_w * r_loss + lb_w * lb_loss
             (loss / grad_acc).backward()
 
             if (i + 1) % grad_acc == 0:
@@ -137,13 +168,17 @@ def main():
                 optim.zero_grad(set_to_none=True)
                 global_step += 1
                 if global_step % 10 == 0:
-                    print(f"ep={ep} step={global_step} lm={lm_loss.item():.4f} router={r_loss.item():.4f}")
+                    util = expert_utilization(aux)
+                    util_s = " ".join(f"{k}={v:.2f}" for k, v in util.items())
+                    print(
+                        f"ep={ep} step={global_step} lm={lm_loss.item():.4f} "
+                        f"router={r_loss.item():.4f} lb={lb_loss.item():.4f} {util_s}"
+                    )
 
         ckpt = out_dir / f"epoch-{ep+1}.pt"
         torch.save({"model": model.state_dict(), "tokenizer": tok.name_or_path}, ckpt)
         print(f"saved {ckpt}")
 
-    # quick val perplexity proxy
     model.eval()
     losses = []
     with torch.no_grad():
