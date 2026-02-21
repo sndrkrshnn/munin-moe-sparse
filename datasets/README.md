@@ -29,11 +29,13 @@ Supported shapes:
 
 ```bash
 python datasets/clean_toolcalling_dataset.py \
-  --input /path/to/toolcalling_raw.json \
+  --input /path/to/toolcalling_raw.parquet \
   --output data/processed/toolcalling_train.jsonl \
   --val-output data/processed/toolcalling_val.jsonl \
   --val-ratio 0.1
 ```
+
+Supported inputs: `.json`, `.jsonl`, `.parquet`.
 
 ## 3) Merge expert datasets for training
 

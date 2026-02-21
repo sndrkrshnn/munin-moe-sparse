@@ -37,7 +37,7 @@ python datasets/clean_linux_dataset.py \
 
 # 3) Clean tool-calling dataset
 python datasets/clean_toolcalling_dataset.py \
-  --input /path/to/toolcalling_raw.json \
+  --input /path/to/toolcalling_raw.parquet \
   --output data/processed/toolcalling_train.jsonl \
   --val-output data/processed/toolcalling_val.jsonl
 

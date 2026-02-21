@@ -5,6 +5,17 @@ import random
 from pathlib import Path
 
 
+def maybe_json(v):
+    if isinstance(v, str):
+        s = v.strip()
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+            try:
+                return json.loads(s)
+            except Exception:
+                return v
+    return v
+
+
 def load_any(path: Path):
     ext = path.suffix.lower()
     if ext == ".jsonl":
@@ -15,24 +26,33 @@ def load_any(path: Path):
                 if line:
                     rows.append(json.loads(line))
         return rows
+
     if ext == ".json":
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
             return data
         raise ValueError("JSON input must be a list")
-    raise ValueError("Supported input types: .json, .jsonl")
+
+    if ext == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+        except Exception as e:
+            raise RuntimeError("Parquet input requires pyarrow. Install with: pip install pyarrow") from e
+
+        table = pq.read_table(path)
+        rows = table.to_pylist()
+        # normalize nested JSON strings from parquet columns
+        for r in rows:
+            if isinstance(r, dict):
+                for k, v in list(r.items()):
+                    r[k] = maybe_json(v)
+        return rows
+
+    raise ValueError("Supported input types: .json, .jsonl, .parquet")
 
 
 def parse_conversation(conv):
-    """
-    Expected style:
-    [
-      {"role":"user","content":"..."},
-      {"role":"tool call","content":{"name":"...","arguments":{...}}},
-      {"role":"assistant","content":"..."}
-    ]
-    """
     if not isinstance(conv, list):
         return None
 
@@ -44,14 +64,14 @@ def parse_conversation(conv):
         if not isinstance(turn, dict):
             continue
         role = str(turn.get("role", "")).strip().lower()
-        content = turn.get("content")
+        content = maybe_json(turn.get("content"))
 
         if role == "user" and isinstance(content, str) and not user_msg:
             user_msg = content.strip()
 
         elif role in {"tool call", "tool_call", "toolcall"} and isinstance(content, dict) and not tool_call:
             name = content.get("name")
-            arguments = content.get("arguments", {})
+            arguments = maybe_json(content.get("arguments", {}))
             if isinstance(name, str) and name.strip() and isinstance(arguments, dict):
                 tool_call = {"name": name.strip(), "arguments": arguments}
 
@@ -71,7 +91,6 @@ def parse_conversation(conv):
 
 
 def parse_row(row):
-    # row may already be conversation list
     if isinstance(row, list):
         return parse_conversation(row)
 
@@ -81,14 +100,15 @@ def parse_row(row):
     # common wrappers
     for key in ("conversation", "messages", "chat"):
         if key in row:
-            out = parse_conversation(row[key])
+            wrapped = maybe_json(row[key])
+            out = parse_conversation(wrapped)
             if out:
                 return out
 
     # fallback direct schema
     text = row.get("text") or row.get("prompt")
     tool_name = row.get("tool_name")
-    tool_args = row.get("tool_args")
+    tool_args = maybe_json(row.get("tool_args"))
     if text and tool_name:
         if not isinstance(tool_args, dict):
             tool_args = {}
